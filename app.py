@@ -4,41 +4,35 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-
 st.set_page_config(
     page_title="Avian HPG Axis and Photostimulation Simulator",
     page_icon="🐔",
     layout="wide",
 )
 
-
 SIM_DAYS = 280
 BASELINE_PHOTOSTIM_AGE = 147
 MATURE_BW_G = 1650
 
 
-def logistic(x: np.ndarray | float, midpoint: float, steepness: float) -> np.ndarray | float:
+def logistic(x, midpoint, steepness):
     """Return a bounded sigmoid used for gradual biological responses."""
     return 1.0 / (1.0 + np.exp(-steepness * (x - midpoint)))
 
 
-def build_growth_curve(days: np.ndarray, hatch_weight_g: float, mature_weight_g: float) -> np.ndarray:
+def build_growth_curve(days, hatch_weight_g, mature_weight_g):
     """Approximate pullet growth using a logistic curve."""
     growth_fraction = logistic(days, midpoint=98, steepness=0.045)
     return hatch_weight_g + (mature_weight_g - hatch_weight_g) * growth_fraction
 
 
-def calculate_body_weight_modifier(target_weight_pct: float) -> float:
+def calculate_body_weight_modifier(target_weight_pct):
     """Translate target body weight achievement into a reproductive readiness modifier."""
     deviation = (target_weight_pct - 100.0) / 100.0
     return float(np.clip(1.0 + 0.8 * deviation, 0.75, 1.15))
 
 
-def calculate_light_stimulation(
-    photoperiod_hours: float,
-    light_intensity_lux: float,
-    spectrum_factor: float,
-) -> float:
+def calculate_light_stimulation(photoperiod_hours, light_intensity_lux, spectrum_factor):
     """Estimate the strength of photostimulatory input to the hypothalamus."""
     photoperiod_signal = logistic(photoperiod_hours, midpoint=12.8, steepness=1.25)
     intensity_signal = logistic(light_intensity_lux, midpoint=12.0, steepness=0.22)
@@ -47,23 +41,20 @@ def calculate_light_stimulation(
 
 
 def calculate_hpg_activation(
-    days: np.ndarray,
-    body_weight_g: np.ndarray,
-    target_weight_pct: float,
-    photostim_age_days: int,
-    photoperiod_before: float,
-    photoperiod_after: float,
-    intensity_lux: float,
-    spectrum_factor: float,
-    stress_index: float,
-) -> pd.DataFrame:
+    days,
+    body_weight_g,
+    target_weight_pct,
+    photostim_age_days,
+    photoperiod_before,
+    photoperiod_after,
+    intensity_lux,
+    spectrum_factor,
+    stress_index,
+):
     """Simulate HPG activation and downstream reproductive hormones."""
     photoperiod = np.where(days < photostim_age_days, photoperiod_before, photoperiod_after)
     light_drive = np.array(
-        [
-            calculate_light_stimulation(hours, intensity_lux, spectrum_factor)
-            for hours in photoperiod
-        ]
+        [calculate_light_stimulation(hours, intensity_lux, spectrum_factor) for hours in photoperiod]
     )
 
     readiness = np.clip(body_weight_g / (0.93 * MATURE_BW_G), 0.3, 1.2)
@@ -97,12 +88,7 @@ def calculate_hpg_activation(
     )
 
 
-def calculate_lay_metrics(
-    df: pd.DataFrame,
-    photostim_age_days: int,
-    stress_index: float,
-    egg_weight_g: float,
-) -> pd.DataFrame:
+def calculate_lay_metrics(df, photostim_age_days, stress_index, egg_weight_g):
     """Convert hormone activation into age at first egg and lay performance."""
     activation = df["hpg_signal"].to_numpy()
     days = df["day"].to_numpy()
@@ -138,7 +124,7 @@ def calculate_lay_metrics(
     return output
 
 
-def calculate_welfare_and_risks(df: pd.DataFrame, stress_index: float, photoperiod_after: float) -> dict:
+def calculate_welfare_and_risks(df, stress_index, photoperiod_after):
     """Estimate simple risk and welfare outputs for teaching purposes."""
     final_bw = float(df["body_weight_g"].iloc[-1])
     peak_prod = float(df["hen_day_production_pct"].max())
@@ -148,14 +134,28 @@ def calculate_welfare_and_risks(df: pd.DataFrame, stress_index: float, photoperi
     underweight_penalty = max(0.0, 1500.0 - final_bw) / 20.0
     overstimulation_penalty = max(0.0, activation_peak - 0.9) * 20.0
 
-    welfare_score = 100 - (0.45 * stress_index) - chronic_long_day_penalty - underweight_penalty - overstimulation_penalty
+    welfare_score = (
+        100
+        - (0.45 * stress_index)
+        - chronic_long_day_penalty
+        - underweight_penalty
+        - overstimulation_penalty
+    )
     welfare_score = float(np.clip(welfare_score, 35, 100))
 
     delayed_maturity_risk = float(
-        np.clip(5 + 0.18 * stress_index + max(0, 147 - int(df["age_first_egg"].iloc[0])) * 0.08, 0, 40)
+        np.clip(
+            5 + 0.18 * stress_index + max(0, 147 - int(df["age_first_egg"].iloc[0])) * 0.08,
+            0,
+            40,
+        )
     )
-    erratic_lay_risk = float(np.clip(4 + 0.22 * stress_index + max(0.0, 15.0 - peak_prod / 6.0), 0, 35))
-    metabolic_risk = float(np.clip(3 + chronic_long_day_penalty * 0.8 + max(0.0, peak_prod - 90.0) * 0.25, 0, 30))
+    erratic_lay_risk = float(
+        np.clip(4 + 0.22 * stress_index + max(0.0, 15.0 - peak_prod / 6.0), 0, 35)
+    )
+    metabolic_risk = float(
+        np.clip(3 + chronic_long_day_penalty * 0.8 + max(0.0, peak_prod - 90.0) * 0.25, 0, 30)
+    )
 
     return {
         "welfare_score": welfare_score,
@@ -165,7 +165,7 @@ def calculate_welfare_and_risks(df: pd.DataFrame, stress_index: float, photoperi
     }
 
 
-def summarize_outputs(df: pd.DataFrame, risks: dict) -> dict:
+def summarize_outputs(df, risks):
     """Collect dashboard summary metrics."""
     final = df.iloc[-1]
     peak_idx = df["hen_day_production_pct"].idxmax()
@@ -183,19 +183,27 @@ def summarize_outputs(df: pd.DataFrame, risks: dict) -> dict:
     }
 
 
-def generate_interpretation(summary: dict, photostim_age_days: int, photoperiod_after: float, stress_index: float) -> str:
+def generate_interpretation(summary, photostim_age_days, photoperiod_after, stress_index):
     """Generate a classroom-friendly interpretation of the scenario."""
     tradeoffs = []
 
     if summary["age_first_egg"] < 150:
-        tradeoffs.append("Photostimulation produced an early reproductive response, which can speed onset of lay.")
+        tradeoffs.append(
+            "Photostimulation produced an early reproductive response, which can speed onset of lay."
+        )
     elif summary["age_first_egg"] > 165:
-        tradeoffs.append("The flock showed delayed sexual maturity, suggesting that light or body-weight readiness was not strong enough.")
+        tradeoffs.append(
+            "The flock showed delayed sexual maturity, suggesting that light or body-weight readiness was not strong enough."
+        )
 
     if photoperiod_after >= 16:
-        tradeoffs.append("A longer day length strengthened HPG signaling, but sustained long photoperiods can trade some welfare margin for faster activation.")
+        tradeoffs.append(
+            "A longer day length strengthened HPG signaling, but sustained long photoperiods can trade some welfare margin for faster activation."
+        )
     elif photoperiod_after <= 13:
-        tradeoffs.append("A conservative photoperiod kept stimulation modest, which supports caution but can delay ovarian activation.")
+        tradeoffs.append(
+            "A conservative photoperiod kept stimulation modest, which supports caution but can delay ovarian activation."
+        )
 
     if photostim_age_days < 140:
         tradeoffs.append("Early photostimulation may challenge birds that are not fully body-weight ready.")
@@ -208,14 +216,17 @@ def generate_interpretation(summary: dict, photostim_age_days: int, photoperiod_
         tradeoffs.append("Low background stress allowed more of the light signal to translate into reproductive output.")
 
     if summary["welfare_score"] < 65:
-        tradeoffs.append("This scenario creates a welfare caution, so students should discuss whether faster activation is worth the added strain.")
+        tradeoffs.append(
+            "This scenario creates a welfare caution, so students should discuss whether faster activation is worth the added strain."
+        )
 
     return " ".join(tradeoffs[:4])
 
 
-def make_curve_plot(df: pd.DataFrame) -> go.Figure:
+def make_curve_plot(df):
     """Plot growth, HPG activation, and lay response over time."""
     fig = go.Figure()
+
     fig.add_trace(
         go.Scatter(
             x=df["day"],
@@ -225,6 +236,7 @@ def make_curve_plot(df: pd.DataFrame) -> go.Figure:
             yaxis="y1",
         )
     )
+
     fig.add_trace(
         go.Scatter(
             x=df["day"],
@@ -234,6 +246,7 @@ def make_curve_plot(df: pd.DataFrame) -> go.Figure:
             yaxis="y2",
         )
     )
+
     fig.add_trace(
         go.Scatter(
             x=df["day"],
@@ -243,23 +256,29 @@ def make_curve_plot(df: pd.DataFrame) -> go.Figure:
             yaxis="y2",
         )
     )
+
     fig.update_layout(
         height=500,
         margin=dict(l=10, r=10, t=10, b=10),
         xaxis=dict(title="Age (days)"),
-        yaxis=dict(title="Body weight (g)", titlefont=dict(color="#2F5D50")),
+        yaxis=dict(
+            title=dict(text="Body weight (g)", font=dict(color="#2F5D50")),
+            tickfont=dict(color="#2F5D50"),
+        ),
         yaxis2=dict(
-            title="Activation / production (%)",
+            title=dict(text="Activation / production (%)"),
             overlaying="y",
             side="right",
             range=[0, 100],
+            tickfont=dict(color="#A63D40"),
         ),
         legend=dict(orientation="h", y=1.08),
     )
+
     return fig
 
 
-def make_hormone_plot(df: pd.DataFrame) -> go.Figure:
+def make_hormone_plot(df):
     """Plot hormone indices through time."""
     long_df = df.melt(
         id_vars="day",
@@ -274,6 +293,7 @@ def make_hormone_plot(df: pd.DataFrame) -> go.Figure:
         "estradiol_index": "Estradiol",
     }
     long_df["signal"] = long_df["signal"].map(label_map)
+
     return px.line(
         long_df,
         x="day",
@@ -290,7 +310,7 @@ def make_hormone_plot(df: pd.DataFrame) -> go.Figure:
     )
 
 
-def make_risk_plot(risks: dict) -> go.Figure:
+def make_risk_plot(risks):
     """Plot simplified reproductive risk outcomes."""
     risk_df = pd.DataFrame(
         {
@@ -302,6 +322,7 @@ def make_risk_plot(risks: dict) -> go.Figure:
             ],
         }
     )
+
     return px.bar(
         risk_df,
         x="Risk (%)",
@@ -315,17 +336,17 @@ def make_risk_plot(risks: dict) -> go.Figure:
 
 
 def run_simulation(
-    hatch_weight_g: float,
-    mature_weight_g: float,
-    target_weight_pct: float,
-    photostim_age_days: int,
-    photoperiod_before: float,
-    photoperiod_after: float,
-    light_intensity_lux: float,
-    spectrum_factor: float,
-    stress_index: float,
-    egg_weight_g: float,
-) -> tuple[pd.DataFrame, dict]:
+    hatch_weight_g,
+    mature_weight_g,
+    target_weight_pct,
+    photostim_age_days,
+    photoperiod_before,
+    photoperiod_after,
+    light_intensity_lux,
+    spectrum_factor,
+    stress_index,
+    egg_weight_g,
+):
     """Run the full teaching simulation."""
     days = np.arange(0, SIM_DAYS + 1)
     body_weight = build_growth_curve(days, hatch_weight_g, mature_weight_g)
@@ -376,7 +397,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 st.markdown(
     """
     <div class="hero">
@@ -393,7 +413,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 
 with st.sidebar:
     st.header("Scenario Controls")
@@ -426,7 +445,6 @@ with st.sidebar:
     st.subheader("Management context")
     stress_index = st.slider("Background stress challenge", 0, 100, 20, 1)
     egg_weight_g = st.slider("Average egg weight after onset (g)", 52, 72, int(egg_weight_default), 1)
-
 
 df, summary = run_simulation(
     hatch_weight_g=hatch_weight_g,
@@ -466,6 +484,7 @@ with right:
             "This scenario pushes reproductive activation with a narrower welfare margin. "
             "Discuss whether the timing, day length, or stress load should be moderated."
         )
+
     if summary["age_first_egg"] > 165:
         st.info(
             "Delayed maturity suggests that birds may not have been sufficiently ready in body weight, "
@@ -476,7 +495,6 @@ with right:
     risk_cols[0].metric("Delayed maturity risk", f"{summary['delayed_maturity_risk']:.1f}%")
     risk_cols[1].metric("Metabolic strain risk", f"{summary['metabolic_risk']:.1f}%")
 
-
 bottom_left, bottom_right = st.columns(2)
 
 with bottom_left:
@@ -486,7 +504,6 @@ with bottom_left:
 with bottom_right:
     st.subheader("Risk Overview")
     st.plotly_chart(make_risk_plot(summary), use_container_width=True)
-
 
 st.subheader("Daily Output Table")
 display_df = df[
@@ -504,6 +521,7 @@ display_df = df[
         "daily_feed_intake_g",
     ]
 ].copy()
+
 display_df.columns = [
     "Day",
     "Body weight (g)",
@@ -517,10 +535,16 @@ display_df.columns = [
     "Cumulative eggs",
     "Daily feed intake (g)",
 ]
+
 st.dataframe(display_df.round(2), use_container_width=True, height=320)
 
 csv = display_df.to_csv(index=False).encode("utf-8")
-st.download_button("Download daily results as CSV", csv, "avian_hpg_photostim_simulation.csv", "text/csv")
+st.download_button(
+    "Download daily results as CSV",
+    csv,
+    "avian_hpg_photostim_simulation.csv",
+    "text/csv",
+)
 
 with st.expander("Instructor Mode: Model Logic"):
     st.markdown(
